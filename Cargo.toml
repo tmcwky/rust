@@ -26,6 +26,9 @@ name = "basic_serial"
 [[example]]
 name = "basic_tcp"
 
+[[example]]
+name = "basic_ble"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [build-dependencies]

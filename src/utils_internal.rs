@@ -1,8 +1,13 @@
-use crate::errors_internal::Error;
+use crate::connections::ble_handler::BleHandler;
+use crate::errors_internal::{Error, InternalStreamError};
+use futures::stream::StreamExt;
+use std::pin::pin;
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
 
 use rand::{distributions::Standard, prelude::Distribution, Rng};
+use tokio::io::DuplexStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_serial::{available_ports, SerialPort, SerialStream};
 
 use crate::connections::stream_api::StreamHandle;
@@ -192,6 +197,80 @@ pub async fn build_tcp_stream(
     };
 
     Ok(StreamHandle::from_stream(stream))
+}
+
+pub async fn build_ble_stream(name: String) -> Result<StreamHandle<DuplexStream>, Error> {
+    let ble_handler = BleHandler::new(name).await?;
+
+    let (client, mut server) = tokio::io::duplex(1024);
+    let handle = tokio::spawn(async move {
+        let duplex_write_error_fn = |e| {
+            Error::InternalStreamError(InternalStreamError::StreamWriteError {
+                source: Box::new(e),
+            })
+        };
+        let mut messages_read = ble_handler.read_fromnum().await?;
+
+        let mut buf = [0u8; 1024];
+        if let Ok(len) = server.read(&mut buf).await {
+            ble_handler.write_to_radio(&buf[..len]).await?
+        }
+        while let Ok(msg) = ble_handler.read_from_radio().await {
+            if msg.len() == 0 {
+                break;
+            }
+            let msg = format_data_packet(msg.into())?;
+            server
+                .write(msg.data())
+                .await
+                .map_err(duplex_write_error_fn)?;
+        }
+
+        let mut notification_stream = pin!(ble_handler
+            .notifications()
+            .await?
+            .filter_map(BleHandler::filter_map));
+        loop {
+            // Note: the following `tokio::select` is only half-duplex on the BLE radio. While we
+            // are reading from the radio, we are not writing to it and vice versa. However, BLE is
+            // a half-duplex technology, so we wouldn't gain much with a full duplex solution
+            // anyway.
+            tokio::select!(
+                notification = notification_stream.next() => {
+                    if let Some(msg_count) = notification {
+                        for _ in messages_read..msg_count {
+                            let radio_msg = ble_handler.read_from_radio().await;
+                            match radio_msg {
+                                Ok(msg) => {
+                                    let msg = format_data_packet(msg.into())?;
+                                    server.write(msg.data()).await.map_err(duplex_write_error_fn)?;
+                                    messages_read += 1;
+                                },
+                                Err(e) => return Err(e),
+                            }
+                        }
+                    }
+                },
+                from_server = server.read(&mut buf) => {
+                    match from_server {
+                        Ok(len) => ble_handler.write_to_radio(&buf[..len]).await?,
+                        Err(e) => { // Irrecoverable
+                            return Err(Error::InternalStreamError(
+                                InternalStreamError::StreamWriteError {
+                                    source: Box::new(e),
+                                },
+                            ));
+                        }
+                    }
+                }
+            );
+        }
+    });
+
+    Ok(StreamHandle {
+        stream: client,
+        join_handle: Some(handle),
+    })
 }
 
 /// A helper method to generate random numbers using the `rand` crate.
