@@ -3,9 +3,8 @@ use btleplug::api::{
     WriteType,
 };
 use btleplug::platform::{Adapter, Manager, Peripheral};
-use futures_util::Stream;
+use futures_util::stream::BoxStream;
 use log::error;
-use std::pin::Pin;
 use uuid::Uuid;
 
 use crate::errors_internal::{BleConnectionError, Error, InternalStreamError};
@@ -159,9 +158,7 @@ impl BleHandler {
         Self::parse_u32(data)
     }
 
-    pub async fn notifications(
-        &self,
-    ) -> Result<Pin<Box<dyn Stream<Item = ValueNotification> + Send>>, Error> {
+    pub async fn notifications(&self) -> Result<BoxStream<ValueNotification>, Error> {
         self.radio
             .subscribe(&self.fromnum_char)
             .await
