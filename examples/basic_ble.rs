@@ -12,7 +12,7 @@ use meshtastic::utils;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream_api = StreamApi::new();
 
-    println!("Enter the MAC address of a BLE device to connect to:");
+    println!("Enter the MAC address or name of a BLE device to connect to:");
 
     let stdin = io::stdin();
     let entered_address = stdin

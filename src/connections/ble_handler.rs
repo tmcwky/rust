@@ -1,5 +1,5 @@
 use btleplug::api::{
-    Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, ValueNotification,
+    BDAddr, Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, ValueNotification,
     WriteType,
 };
 use btleplug::platform::{Adapter, Manager, Peripheral};
@@ -69,9 +69,40 @@ impl BleHandler {
                 }
                 Ok(peripherals) => {
                     let needle = Some(name.to_owned());
+                    let mac = name
+                        .parse::<BDAddr>()
+                        .unwrap_or_else(|_e| "00:00:00:00:00:00".parse::<BDAddr>().unwrap());
                     for peripheral in peripherals {
                         if let Ok(Some(peripheral_properties)) = peripheral.properties().await {
-                            if peripheral_properties.local_name == needle {
+                            println!(
+                                "{} - {}\n",
+                                peripheral_properties.local_name.clone().unwrap(),
+                                peripheral_properties.address
+                            );
+                            if (peripheral_properties.local_name == needle)
+                                || (peripheral_properties.address == mac)
+                            {
+                                let Ok(is_connected) = peripheral.is_connected().await else {
+                                    todo!()
+                                };
+                                if !is_connected {
+                                    println!(
+                                        "Connecting to peripheral {:?}...",
+                                        &peripheral_properties.local_name
+                                    );
+                                    if let Err(err) = peripheral.connect().await {
+                                        eprintln!(
+                                            "Error connecting to peripheral, skipping: {}",
+                                            err
+                                        );
+                                    }
+                                } else {
+                                    println!(
+                                        "Already connected to peripheral {:?}...",
+                                        &peripheral_properties.local_name
+                                    );
+                                }
+
                                 return Ok(peripheral);
                             }
                         }
@@ -141,11 +172,15 @@ impl BleHandler {
     }
 
     fn parse_u32(data: Vec<u8>) -> Result<u32, Error> {
+        if (data.len() < 4) {
+            return Ok(0);
+        };
         let parsed_value = u32::from_le_bytes(data.as_slice().try_into().map_err(|e| {
             Error::InternalStreamError(InternalStreamError::StreamReadError {
                 source: Box::new(e),
             })
         })?);
+        //let parsed_value = u32::from_le_bytes(data.split_at(4).0.try_into().unwrap());
         Ok(parsed_value)
     }
 
